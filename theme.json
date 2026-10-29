@@ -1,0 +1,19 @@
+{
+  "id": "Zen-Unpinned-Folders",
+  "name": "Zen Unpinned Folders",
+  "description": "Keep active tabs visible when collapsing newly created regular tab groups.",
+  "version": "0.1.0",
+  "author": "YS",
+  "homepage": "https://github.com/YahiaSanad/Zen-Unpinned-Folders",
+  "style": { "chrome": "userChrome.css" },
+  "scripts": {
+    "unpinned-folders.uc.js": {
+      "include": ["chrome://browser/content/browser.xhtml"],
+      "loadOrder": 2
+    }
+  },
+  "readme": "README.md",
+  "ai": "yes",
+  "tags": ["chrome", "tabs", "folders"],
+  "fork": ["zen"]
+}

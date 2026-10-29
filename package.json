@@ -1,0 +1,9 @@
+{
+  "name": "zen-unpinned-folders",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "check": "node --check unpinned-folders.uc.js",
+    "test": "node --test tests/*.test.cjs"
+  }
+}
