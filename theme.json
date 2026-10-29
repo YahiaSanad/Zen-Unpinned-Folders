@@ -2,7 +2,7 @@
   "id": "Zen-Unpinned-Folders",
   "name": "Zen Unpinned Folders",
   "description": "Native collapse and right-click editing for newly created regular tab groups.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "YS",
   "homepage": "https://github.com/YahiaSanad/Zen-Unpinned-Folders",
   "style": { "chrome": "userChrome.css" },

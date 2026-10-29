@@ -1,4 +1,10 @@
 /* Only groups enrolled by this mod. Arc and existing groups keep their rules. */
+#tabbrowser-tabs tab-group[zen-unpinned-folder]:not([split-view-group])
+  > .tab-group-container::after {
+  background: var(--tab-group-color-invert) !important;
+  opacity: 1 !important;
+}
+
 #tabbrowser-tabs tab-group[zen-unpinned-folder]:not([split-view-group])[collapsed] {
   max-height: none !important;
 }

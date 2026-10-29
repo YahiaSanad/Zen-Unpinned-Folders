@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 — 2026-10-29
+
+- Match the vertical stem to the enrolled group's folder-icon color instead of the workspace theme color.
+- Use full opacity so Arc's stem tint does not dilute the selected color.
+- Keep Arc's stem layout and visibility settings; leave unrelated groups and pinned folders unchanged.
+
 ## 0.2.0 — 2026-10-29
 
 - Right-click any enrolled group header to open Zen's native editor for names, colors and group actions.

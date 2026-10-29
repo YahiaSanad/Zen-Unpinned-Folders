@@ -2,7 +2,7 @@
 
 A separate Sine companion mod for Arc 2.0. Newly created **regular, unpinned tab groups** keep their selected tabs visible beneath the header when collapsed. Tabs remain members of their group.
 
-**Status: testing release (0.2.0).** JavaScript syntax checks and 23 automated tests pass. Visual acceptance testing in Zen is pending.
+**Status: testing release (0.2.1).** JavaScript syntax checks and 23 automated tests pass. Visual acceptance testing in Zen is pending.
 
 Repository: [YahiaSanad/Zen-Unpinned-Folders](https://github.com/YahiaSanad/Zen-Unpinned-Folders).
 
@@ -28,7 +28,7 @@ The script forwards `gBrowser.addTabGroup()` unchanged, then enrolls eligible ne
 Right-click the **header of a group enrolled by this mod**, including its folder icon or name, to open Zen's native group editor. This works with the group expanded or collapsed.
 
 - Change the name in the text field.
-- Choose one of the nine native color swatches. Arc's folder icon uses the native group color.
+- Choose one of the nine native color swatches. Arc's folder icon and vertical stem use the same native group-color variable. Changing the group color updates both automatically.
 - Use native actions such as adding a tab, moving the group to a new window, saving/closing, ungrouping or deleting it. Availability follows Zen's own conditions.
 - Click outside the editor to dismiss it. Zen handles name/color changes and session persistence.
 
@@ -66,6 +66,7 @@ Disable through Sine to restore Arc's behavior. If your Sine version does not re
 6. Restart: the new group's behavior should persist while older groups remain unchanged.
 7. Disable the mod: newly enrolled groups should return to Arc's collapse behavior.
 8. Re-enable, right-click an enrolled group header, change its name/color and dismiss the editor. Check the result while expanded and collapsed, then after restart.
+9. With Arc's folder background/stem option enabled, choose several group colors. Confirm the vertical stem follows the folder color while existing unrelated groups keep their previous styling.
 
 Automated checks cover enrollment, restoration exclusions, forwarding, persistence and unload cleanup. They do not prove visual rendering in Zen; browser acceptance testing is pending.
 
