@@ -3,6 +3,7 @@
 
   const marker = "zen-unpinned-folder";
   const preference = "zen.mods.unpinned-folders.group-ids";
+  const groupAccessors = new WeakMap();
   let stopped = false;
   let original;
   let wrapped;
@@ -31,6 +32,30 @@
       return;
     }
     group.setAttribute(marker, "true");
+    repairGroupItems(group);
+  }
+
+  function repairGroupItems(group) {
+    if (groupAccessors.has(group) || !group.groupContainer ||
+        group.tabsAndSplitViews?.length) {
+      return;
+    }
+    const previous = Object.getOwnPropertyDescriptor(group, "tabsAndSplitViews");
+    if (previous && !previous.configurable) {
+      return;
+    }
+    // Zen 1.23.4b nests items in groupContainer; its inherited getter reads
+    // direct group children instead, leaving native Ungroup/Move with no items.
+    const get = function () {
+      return Array.from(this.groupContainer.children).filter(item =>
+        browser.isTab(item) || browser.isSplitViewWrapper(item)
+      );
+    };
+    if (!get.call(group).length) {
+      return;
+    }
+    Object.defineProperty(group, "tabsAndSplitViews", { configurable: true, get });
+    groupAccessors.set(group, { previous, get });
   }
 
   function restoreKnownGroups() {
@@ -66,6 +91,30 @@
     });
   }
 
+  function onHeaderContextMenu(event) {
+    if (stopped || event.defaultPrevented) {
+      return;
+    }
+    const header = event.target?.closest?.(".tab-group-label-container");
+    const group = header?.parentElement;
+    if (!group?.hasAttribute(marker)) {
+      return;
+    }
+    try {
+      const menu = browser.tabGroupMenu;
+      if (!eligible(group) || typeof menu?.openEditModal !== "function") {
+        return;
+      }
+      repairGroupItems(group);
+      // Reuse native editing and persistence for names, colors and group actions.
+      menu.openEditModal(group);
+      event.preventDefault();
+      event.stopPropagation();
+    } catch (error) {
+      console.error("[Zen Unpinned Folders]", error);
+    }
+  }
+
   function start() {
     if (stopped || browser) {
       return;
@@ -97,6 +146,7 @@
       browser.addTabGroup = wrapped;
       window.addEventListener("TabGroupCreate", onGroupCreated);
       window.addEventListener("SSWindowStateReady", restoreKnownGroups);
+      window.addEventListener("contextmenu", onHeaderContextMenu, true);
       restoreKnownGroups();
     } catch (error) {
       console.error("[Zen Unpinned Folders]", error);
@@ -119,11 +169,21 @@
     }
     window.removeEventListener("TabGroupCreate", onGroupCreated);
     window.removeEventListener("SSWindowStateReady", restoreKnownGroups);
+    window.removeEventListener("contextmenu", onHeaderContextMenu, true);
     window.removeEventListener("unload", stop);
     if (browser && browser.addTabGroup === wrapped) {
       browser.addTabGroup = original;
     }
     for (const group of document.querySelectorAll(`tab-group[${marker}]`)) {
+      const patched = groupAccessors.get(group);
+      if (patched && Object.getOwnPropertyDescriptor(group, "tabsAndSplitViews")?.get === patched.get) {
+        if (patched.previous) {
+          Object.defineProperty(group, "tabsAndSplitViews", patched.previous);
+        } else {
+          delete group.tabsAndSplitViews;
+        }
+      }
+      groupAccessors.delete(group);
       group.removeAttribute(marker);
     }
   }

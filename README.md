@@ -2,7 +2,7 @@
 
 A separate Sine companion mod for Arc 2.0. Newly created **regular, unpinned tab groups** keep their selected tabs visible beneath the header when collapsed. Tabs remain members of their group.
 
-**Status: initial testing release (0.1.0).** JavaScript syntax checks and 15 automated tests pass. Visual acceptance testing in Zen is pending.
+**Status: testing release (0.2.0).** JavaScript syntax checks and 23 automated tests pass. Visual acceptance testing in Zen is pending.
 
 Repository: [YahiaSanad/Zen-Unpinned-Folders](https://github.com/YahiaSanad/Zen-Unpinned-Folders).
 
@@ -22,6 +22,19 @@ Installed Zen 1.23.4b already implements selected-tab visibility in `MozTabbrows
 Arc 3.4's `modules/chrome/tab-folders.css` hides every collapsed group's child using zero height, opacity and a transform. Scoped CSS restores selected-tab visibility only on groups marked by this mod.
 
 The script forwards `gBrowser.addTabGroup()` unchanged, then enrolls eligible newly created groups. Calls supplying an existing ID, adoption calls and split-view creation are excluded. A private preference, `zen.mods.unpinned-folders.group-ids`, stores only enrolled group IDs, so those groups retain the behavior after restart. Other groups remain unmarked. Disabling the mod removes its markers and restores its method hook without changing any tabs.
+
+## Rename, color and other group actions
+
+Right-click the **header of a group enrolled by this mod**, including its folder icon or name, to open Zen's native group editor. This works with the group expanded or collapsed.
+
+- Change the name in the text field.
+- Choose one of the nine native color swatches. Arc's folder icon uses the native group color.
+- Use native actions such as adding a tab, moving the group to a new window, saving/closing, ungrouping or deleting it. Availability follows Zen's own conditions.
+- Click outside the editor to dismiss it. Zen handles name/color changes and session persistence.
+
+Left-click still expands/collapses the group. Right-clicking a tab inside it still opens that tab's menu. Groups created before the mod was enabled and pinned folders retain their existing menus. Groups enrolled by version 0.1.0 also gain this editor shortcut after updating.
+
+For enrolled groups, a compatibility correction handles Zen 1.23.4b's empty `tabsAndSplitViews` lookup: it reads tabs from `.tab-group-container` so native editor commands can find them. A working native lookup is left alone; the correction is removed on unload.
 
 ## Install from GitHub with Sine
 
@@ -52,6 +65,7 @@ Disable through Sine to restore Arc's behavior. If your Sine version does not re
 5. Select a tab outside the collapsed group. Confirm native regular-group visibility applies.
 6. Restart: the new group's behavior should persist while older groups remain unchanged.
 7. Disable the mod: newly enrolled groups should return to Arc's collapse behavior.
+8. Re-enable, right-click an enrolled group header, change its name/color and dismiss the editor. Check the result while expanded and collapsed, then after restart.
 
 Automated checks cover enrollment, restoration exclusions, forwarding, persistence and unload cleanup. They do not prove visual rendering in Zen; browser acceptance testing is pending.
 

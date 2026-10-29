@@ -29,6 +29,7 @@ function harness({ groups = [], preferences = new Map(), ready = true } = {}) {
   const observers = new Map();
   const microtasks = [];
   const errors = [];
+  const editCalls = [];
   let cleanup;
   let next = group("new");
   let call;
@@ -39,7 +40,14 @@ function harness({ groups = [], preferences = new Map(), ready = true } = {}) {
     return next;
   }
   const window = {
-    gBrowser: { addTabGroup: original },
+    gBrowser: {
+      addTabGroup: original,
+      isTab: item => item.localName === "tab",
+      isSplitViewWrapper: item => item.localName === "tab-split-view-wrapper",
+      tabGroupMenu: {
+        openEditModal(item) { editCalls.push({ menu: this, group: item }); },
+      },
+    },
     gBrowserInit: { delayedStartupFinished: ready },
     addUnloadListener: callback => { cleanup = callback; },
     addEventListener(name, callback) {
@@ -66,12 +74,15 @@ function harness({ groups = [], preferences = new Map(), ready = true } = {}) {
   };
   vm.runInNewContext(source, context);
   return {
-    window, original, preferences, groups, errors, observers,
+    window, original, preferences, groups, errors, observers, editCalls,
     setNext: value => { next = value; },
     getCall: () => call,
     stop: () => cleanup(),
     emit: (name, target) => {
       for (const callback of events.get(name) ?? []) callback({ target });
+    },
+    dispatch: (name, event) => {
+      for (const callback of events.get(name) ?? []) callback(event);
     },
     flush: () => { while (microtasks.length) microtasks.shift()(); },
   };
@@ -83,6 +94,138 @@ test("loading leaves existing groups and saved data untouched", () => {
   assert.equal(existing.hasAttribute(marker), false);
   assert.equal(h.preferences.size, 0);
   assert.equal(existing.tabs.length, 1);
+});
+
+function headerEvent(item) {
+  const header = { parentElement: item };
+  return {
+    target: { closest: selector => selector === ".tab-group-label-container" ? header : null },
+    defaultPrevented: false,
+    propagationStopped: false,
+    preventDefault() { this.defaultPrevented = true; },
+    stopPropagation() { this.propagationStopped = true; },
+  };
+}
+
+test("right-clicking an enrolled header opens native rename/color editor once", () => {
+  const h = harness();
+  const created = h.window.gBrowser.addTabGroup([]);
+  const event = headerEvent(created);
+  h.dispatch("contextmenu", event);
+  assert.equal(h.editCalls.length, 1);
+  assert.equal(h.editCalls[0].group, created);
+  assert.equal(h.editCalls[0].menu, h.window.gBrowser.tabGroupMenu);
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(event.propagationStopped, true);
+});
+
+test("existing headers, pinned folders and child-tab menus are untouched", () => {
+  const h = harness();
+  const pinned = group("pinned", { pinned: true });
+  pinned.setAttribute(marker, "true");
+  const events = [headerEvent(group("old")), headerEvent(pinned), {
+    target: { closest: () => null },
+    preventDefault() { throw new Error("Child tab menu intercepted"); },
+  }];
+  for (const event of events) h.dispatch("contextmenu", event);
+  assert.equal(h.editCalls.length, 0);
+  assert.equal(events[0].defaultPrevented, false);
+  assert.equal(events[1].defaultPrevented, false);
+});
+
+test("missing or failed native editor leaves default menu available", () => {
+  for (const fail of [false, true]) {
+    const h = harness();
+    const created = h.window.gBrowser.addTabGroup([]);
+    h.window.gBrowser.tabGroupMenu.openEditModal = fail
+      ? () => { throw new Error("Editor unavailable"); }
+      : undefined;
+    const event = headerEvent(created);
+    h.dispatch("contextmenu", event);
+    assert.equal(event.defaultPrevented, false);
+    assert.equal(event.propagationStopped, false);
+  }
+});
+
+test("left-click, cancelled context events and unload do not open editor", () => {
+  const h = harness();
+  const created = h.window.gBrowser.addTabGroup([]);
+  h.dispatch("click", headerEvent(created));
+  const cancelled = headerEvent(created);
+  cancelled.defaultPrevented = true;
+  h.dispatch("contextmenu", cancelled);
+  assert.equal(h.editCalls.length, 0);
+  h.stop();
+  h.dispatch("contextmenu", headerEvent(created));
+  assert.equal(h.editCalls.length, 0);
+});
+
+test("native item lookup sees nested tabs in order and restores its descriptor on unload", () => {
+  const h = harness();
+  const first = { localName: "tab", pinned: false, hasAttribute: () => false };
+  const second = { ...first };
+  const split = { localName: "tab-split-view-wrapper" };
+  const created = group("nested", {
+    tabs: [first, second],
+    groupContainer: { children: [{ localName: "div" }, first, split, second] },
+  });
+  const originalGet = () => [];
+  Object.defineProperty(created, "tabsAndSplitViews", { configurable: true, get: originalGet });
+  h.setNext(created);
+  h.window.gBrowser.addTabGroup([]);
+  assert.deepEqual(Array.from(created.tabsAndSplitViews), [first, split, second]);
+  created.groupContainer.children.splice(1, 1);
+  assert.deepEqual(Array.from(created.tabsAndSplitViews), [split, second]);
+  h.stop();
+  assert.equal(Object.getOwnPropertyDescriptor(created, "tabsAndSplitViews").get, originalGet);
+});
+
+test("working native lookup and unregistered group lookup remain untouched", () => {
+  const existing = group("old", { groupContainer: { children: [] } });
+  const h = harness({ groups: [existing] });
+  const nativeItems = [{}];
+  const created = group("working", { groupContainer: { children: [] } });
+  const originalGet = () => nativeItems;
+  Object.defineProperty(created, "tabsAndSplitViews", { configurable: true, get: originalGet });
+  h.setNext(created);
+  h.window.gBrowser.addTabGroup([]);
+  assert.equal(Object.getOwnPropertyDescriptor(created, "tabsAndSplitViews").get, originalGet);
+  assert.equal(Object.hasOwn(existing, "tabsAndSplitViews"), false);
+});
+
+test("a regular group containing only a split wrapper gets the native lookup repair", () => {
+  const h = harness();
+  const split = { localName: "tab-split-view-wrapper" };
+  const created = group("split-only", {
+    tabs: [], groupContainer: { children: [split] },
+  });
+  h.setNext(created);
+  h.window.gBrowser.addTabGroup([]);
+  assert.equal(created.hasAttribute(marker), true);
+  assert.deepEqual(Array.from(created.tabsAndSplitViews), [split]);
+});
+
+test("native ungroup iteration can remove nested tabs without closing or reordering them", () => {
+  const h = harness();
+  const tabs = ["one", "two"].map(id => ({
+    id, localName: "tab", pinned: false, hasAttribute: () => false,
+  }));
+  const created = group("ungroup", { tabs, groupContainer: { children: [...tabs] } });
+  const nativePrototype = { get tabsAndSplitViews() { return []; } };
+  Object.setPrototypeOf(created, nativePrototype);
+  h.setNext(created);
+  h.window.gBrowser.addTabGroup([]);
+  const outside = [];
+  // Native ungroupTabs iterates the getter backwards and inserts after the group.
+  for (let i = created.tabsAndSplitViews.length - 1; i >= 0; i--) {
+    const tab = created.tabsAndSplitViews[i];
+    outside.unshift(tab);
+    created.groupContainer.children.splice(created.groupContainer.children.indexOf(tab), 1);
+  }
+  assert.deepEqual(outside, tabs);
+  assert.equal(created.groupContainer.children.length, 0);
+  h.stop();
+  assert.equal(Object.hasOwn(created, "tabsAndSplitViews"), false);
 });
 
 test("new regular groups are enrolled without changing native arguments or return", () => {
