@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — 2026-10-31
+
+- Keep previously selected and multiselected tabs visible inside collapsed regular groups after focus moves.
+- Enroll existing regular groups on startup/session restore as well as newly created groups.
+- Clear transient visibility history on expand, unload, close, pin or move out; no tab movement or session-history storage.
+- Keep native visibility queries and accessibility state aligned with retained rows.
+- Preserve pinned folders, Essentials, group colors and native editor actions.
+- Add regression tests; live Zen acceptance remains pending user testing.
+
 ## 0.2.1 — 2026-10-29
 
 - Match the vertical stem to the enrolled group's folder-icon color instead of the workspace theme color.

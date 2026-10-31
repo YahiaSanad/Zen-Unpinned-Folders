@@ -4,6 +4,11 @@
   const marker = "zen-unpinned-folder";
   const preference = "zen.mods.unpinned-folders.group-ids";
   const groupAccessors = new WeakMap();
+  const openMarker = "zen-unpinned-folder-open";
+  const openOwners = new WeakMap();
+  const visibilityMethods = new WeakMap();
+  const visibilityEvents = ["TabGroupCollapse", "TabGroupExpand", "TabMultiSelect"];
+  let tabObserver;
   let stopped = false;
   let original;
   let wrapped;
@@ -33,6 +38,119 @@
     }
     group.setAttribute(marker, "true");
     repairGroupItems(group);
+    extendVisibility(group);
+    refreshVisibility();
+  }
+
+  function ownerOf(tab) {
+    return tab?.closest?.(`tab-group[${marker}]:not([split-view-group])`);
+  }
+
+  function canRemember(tab, group) {
+    return group?.hasAttribute(marker) && eligible(group) && group.collapsed &&
+      tab.isConnected && !tab.pinned &&
+      !["pending", "closing", "pinned", "zen-essential"].some(name => tab.hasAttribute(name));
+  }
+
+  function remember(tab) {
+    const split = tab?.splitview ??
+      (tab?.group?.hasAttribute?.("split-view-group") ? tab.group : null);
+    for (const child of split?.tabs ?? [tab]) {
+      const group = ownerOf(child);
+      if (canRemember(child, group)) {
+        const changed = !child.hasAttribute(openMarker);
+        openOwners.set(child, group);
+        child.setAttribute(openMarker, "true");
+        if (changed) browser.tabContainer?._invalidateCachedTabs();
+      }
+    }
+  }
+
+  function restoreAria(tab) {
+    const item = tab.splitview ?? tab;
+    const selected = tab.splitview
+      ? tab.splitview.tabs.some(child => child.selected)
+      : tab.selected;
+    if (tab.group?.collapsed && !selected) {
+      item.setAttribute("aria-hidden", "true");
+    } else {
+      item.removeAttribute("aria-hidden");
+    }
+  }
+
+  function forget(tab) {
+    const sameGroup = ownerOf(tab) === openOwners.get(tab);
+    tab.removeAttribute(openMarker);
+    openOwners.delete(tab);
+    browser.tabContainer?._invalidateCachedTabs();
+    if (sameGroup) restoreAria(tab);
+  }
+
+  function refreshVisibility() {
+    if (stopped) return;
+    for (const tab of document.querySelectorAll(`tab[${openMarker}]`)) {
+      const group = ownerOf(tab);
+      if (openOwners.get(tab) !== group || !canRemember(tab, group)) {
+        forget(tab);
+      }
+    }
+    for (const group of document.querySelectorAll(`tab-group[${marker}]`)) {
+      if (!eligible(group)) continue;
+      for (const tab of group.querySelectorAll?.("tab") ?? group.tabs) {
+        if (tab.selected || tab.multiselected) remember(tab);
+        if (tab.hasAttribute(openMarker)) {
+          (tab.splitview ?? tab).removeAttribute("aria-hidden");
+        }
+      }
+    }
+  }
+
+  function extendVisibility(group) {
+    if (visibilityMethods.has(group) || typeof group.isTabVisibleInGroup !== "function") return;
+    const previous = Object.getOwnPropertyDescriptor(group, "isTabVisibleInGroup");
+    if (previous && !previous.configurable) return;
+    const originalVisible = group.isTabVisibleInGroup;
+    const replacement = function (tab) {
+      return Reflect.apply(originalVisible, this, [tab]) ||
+        (!stopped && !this.isBeingDragged && ownerOf(tab) === this &&
+          openOwners.get(tab) === this && tab.hasAttribute(openMarker) &&
+          canRemember(tab, this));
+    };
+    Object.defineProperty(group, "isTabVisibleInGroup", {
+      configurable: true, writable: true, value: replacement,
+    });
+    // Zen 1.24b's tab.visible reads activeTabs on collapsed ancestors.
+    let activeTabsGetter;
+    if (!("activeTabs" in group)) {
+      activeTabsGetter = function () {
+        if (stopped) return [];
+        return Array.from(this.querySelectorAll("tab")).filter(tab =>
+          openOwners.get(tab) === this && tab.hasAttribute(openMarker) &&
+          ownerOf(tab) === this && canRemember(tab, this)
+        );
+      };
+      Object.defineProperty(group, "activeTabs", { configurable: true, get: activeTabsGetter });
+    }
+    visibilityMethods.set(group, { previous, replacement, activeTabsGetter });
+  }
+
+  function onTabSelect(event) {
+    if (stopped) return;
+    remember(event.detail?.previousTab);
+    remember(event.target);
+    // Native TabSelect listeners can update aria-hidden later in this event.
+    queueMicrotask(refreshVisibility);
+  }
+
+  function onTabMutations(records) {
+    if (stopped) return;
+    for (const record of records) {
+      if (["selected", "multiselected"].includes(record.attributeName) &&
+          record.oldValue === "true") {
+        remember(record.target);
+      }
+    }
+    refreshVisibility();
   }
 
   function repairGroupItems(group) {
@@ -58,17 +176,19 @@
     groupAccessors.set(group, { previous, get });
   }
 
-  function restoreKnownGroups() {
+  function enrollCurrentGroups() {
     if (stopped) {
       return;
     }
     try {
       const ids = readIds();
       for (const group of document.querySelectorAll("tab-group")) {
-        if (ids.has(group.id)) {
+        if (eligible(group)) {
+          ids.add(group.id);
           mark(group);
         }
       }
+      if (ids.size) Services.prefs.setStringPref(preference, JSON.stringify([...ids]));
     } catch (error) {
       console.error("[Zen Unpinned Folders]", error);
     }
@@ -82,7 +202,10 @@
         return;
       }
       try {
-        if (readIds().has(group.id)) {
+        if (eligible(group)) {
+          const ids = readIds();
+          ids.add(group.id);
+          Services.prefs.setStringPref(preference, JSON.stringify([...ids]));
           mark(group);
         }
       } catch (error) {
@@ -129,7 +252,7 @@
       wrapped = function (...args) {
         const group = Reflect.apply(original, this, args);
         const options = args[1] ?? {};
-        // Zen supplies IDs when restoring/adopting groups. Never enroll those.
+        // Restore/adoption calls are handled after creation or session restore.
         try {
           if (!stopped && !options.id && !options.isAdoptingGroup &&
               !options.forSplitView && eligible(group)) {
@@ -145,9 +268,19 @@
       };
       browser.addTabGroup = wrapped;
       window.addEventListener("TabGroupCreate", onGroupCreated);
-      window.addEventListener("SSWindowStateReady", restoreKnownGroups);
+      window.addEventListener("SSWindowStateReady", enrollCurrentGroups);
       window.addEventListener("contextmenu", onHeaderContextMenu, true);
-      restoreKnownGroups();
+      window.addEventListener("TabSelect", onTabSelect, true);
+      for (const event of visibilityEvents) window.addEventListener(event, refreshVisibility);
+      const tabRoot = document.getElementById("tabbrowser-tabs");
+      if (tabRoot) {
+        tabObserver = new MutationObserver(onTabMutations);
+        tabObserver.observe(tabRoot, {
+          subtree: true, childList: true, attributes: true, attributeOldValue: true,
+          attributeFilter: ["selected", "multiselected", "pending", "closing", "pinned", "collapsed"],
+        });
+      }
+      enrollCurrentGroups();
     } catch (error) {
       console.error("[Zen Unpinned Folders]", error);
     }
@@ -168,13 +301,30 @@
       waitingForStartup = false;
     }
     window.removeEventListener("TabGroupCreate", onGroupCreated);
-    window.removeEventListener("SSWindowStateReady", restoreKnownGroups);
+    window.removeEventListener("SSWindowStateReady", enrollCurrentGroups);
     window.removeEventListener("contextmenu", onHeaderContextMenu, true);
+    window.removeEventListener("TabSelect", onTabSelect, true);
+    for (const event of visibilityEvents) window.removeEventListener(event, refreshVisibility);
+    tabObserver?.disconnect();
     window.removeEventListener("unload", stop);
     if (browser && browser.addTabGroup === wrapped) {
       browser.addTabGroup = original;
     }
+    for (const tab of document.querySelectorAll(`tab[${openMarker}]`)) forget(tab);
     for (const group of document.querySelectorAll(`tab-group[${marker}]`)) {
+      const visibility = visibilityMethods.get(group);
+      if (visibility?.activeTabsGetter &&
+          Object.getOwnPropertyDescriptor(group, "activeTabs")?.get === visibility.activeTabsGetter) {
+        delete group.activeTabs;
+      }
+      if (visibility && group.isTabVisibleInGroup === visibility.replacement) {
+        if (visibility.previous) {
+          Object.defineProperty(group, "isTabVisibleInGroup", visibility.previous);
+        } else {
+          delete group.isTabVisibleInGroup;
+        }
+      }
+      visibilityMethods.delete(group);
       const patched = groupAccessors.get(group);
       if (patched && Object.getOwnPropertyDescriptor(group, "tabsAndSplitViews")?.get === patched.get) {
         if (patched.previous) {

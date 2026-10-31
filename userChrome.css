@@ -1,4 +1,4 @@
-/* Only groups enrolled by this mod. Arc and existing groups keep their rules. */
+/* Only groups enrolled by this mod. Pinned folders and Essentials keep their rules. */
 #tabbrowser-tabs tab-group[zen-unpinned-folder]:not([split-view-group])
   > .tab-group-container::after {
   background: var(--tab-group-color-invert) !important;
@@ -10,11 +10,11 @@
 }
 
 /* Arc 3.4 sets every collapsed child to height 0 and opacity 0.
-   Match Zen's native selected/multiselected visibility without moving tabs. */
+   Keep selected, multiselected and remembered tabs visible without moving them. */
 #tabbrowser-tabs tab-group[zen-unpinned-folder]:not([split-view-group])[collapsed]
-  > .tab-group-container > tab:not([pinned], [hidden], [closing]):is([selected], [multiselected]),
+  > .tab-group-container > tab:not([pinned], [hidden], [closing]):is([selected], [multiselected], [zen-unpinned-folder-open]),
 #tabbrowser-tabs tab-group[zen-unpinned-folder]:not([split-view-group])[collapsed]
-  > .tab-group-container > :is(tab-group[split-view-group], tab-split-view-wrapper):has(tab:is([selected], [multiselected])) tab:not([hidden], [closing]) {
+  > .tab-group-container > :is(tab-group[split-view-group], tab-split-view-wrapper):has(tab:is([selected], [multiselected], [zen-unpinned-folder-open])) tab:not([hidden], [closing]) {
   display: flex !important;
   max-height: none !important;
   min-height: var(--tab-min-height) !important;
@@ -26,15 +26,15 @@
 
 /* A split view inside an enrolled regular group remains one native item. */
 #tabbrowser-tabs tab-group[zen-unpinned-folder]:not([split-view-group])[collapsed]
-  > .tab-group-container > :is(tab-group[split-view-group], tab-split-view-wrapper):has(tab:is([selected], [multiselected])) {
+  > .tab-group-container > :is(tab-group[split-view-group], tab-split-view-wrapper):has(tab:is([selected], [multiselected], [zen-unpinned-folder-open])) {
   max-height: none !important;
   min-height: var(--tab-min-height) !important;
 }
 
 /* No invisible rows or hit targets from Arc's display:flex collapse override. */
 #tabbrowser-tabs tab-group[zen-unpinned-folder]:not([split-view-group])[collapsed]
-  > .tab-group-container > tab:not([selected], [multiselected]),
+  > .tab-group-container > tab:not([selected], [multiselected], [zen-unpinned-folder-open]),
 #tabbrowser-tabs tab-group[zen-unpinned-folder]:not([split-view-group])[collapsed]
-  > .tab-group-container > :is(tab-group[split-view-group], tab-split-view-wrapper):not(:has(tab:is([selected], [multiselected]))) {
+  > .tab-group-container > :is(tab-group[split-view-group], tab-split-view-wrapper):not(:has(tab:is([selected], [multiselected], [zen-unpinned-folder-open]))) {
   display: none !important;
 }

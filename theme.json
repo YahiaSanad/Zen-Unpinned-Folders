@@ -1,8 +1,8 @@
 {
   "id": "Zen-Unpinned-Folders",
   "name": "Zen Unpinned Folders",
-  "description": "Native collapse and right-click editing for newly created regular tab groups.",
-  "version": "0.2.1",
+  "description": "Keep opened tabs visible in collapsed regular groups, with native rename and color controls.",
+  "version": "0.3.0",
   "author": "YS",
   "homepage": "https://github.com/YahiaSanad/Zen-Unpinned-Folders",
   "style": { "chrome": "userChrome.css" },

@@ -30,6 +30,8 @@ function harness({ groups = [], preferences = new Map(), ready = true } = {}) {
   const microtasks = [];
   const errors = [];
   const editCalls = [];
+  let mutationCallback;
+  let disconnected = false;
   let cleanup;
   let next = group("new");
   let call;
@@ -58,7 +60,18 @@ function harness({ groups = [], preferences = new Map(), ready = true } = {}) {
   };
   const context = {
     window,
-    document: { querySelectorAll: () => groups },
+    document: {
+      getElementById: () => ({}),
+      querySelectorAll: selector => selector.startsWith("tab[")
+        ? groups.flatMap(g => g.querySelectorAll?.("tab") ?? g.tabs)
+            .filter(t => t.hasAttribute("zen-unpinned-folder-open"))
+        : selector.includes("[") ? groups.filter(g => g.hasAttribute(marker)) : groups,
+    },
+    MutationObserver: class {
+      constructor(callback) { mutationCallback = callback; }
+      observe() {}
+      disconnect() { disconnected = true; }
+    },
     Services: {
       prefs: {
         getStringPref: (key, fallback) => preferences.get(key) ?? fallback,
@@ -85,15 +98,196 @@ function harness({ groups = [], preferences = new Map(), ready = true } = {}) {
       for (const callback of events.get(name) ?? []) callback(event);
     },
     flush: () => { while (microtasks.length) microtasks.shift()(); },
+    mutate: records => { if (!disconnected) mutationCallback?.(records); },
   };
 }
 
-test("loading leaves existing groups and saved data untouched", () => {
+test("loading enrolls existing regular groups without changing their tabs", () => {
   const existing = group("old");
   const h = harness({ groups: [existing] });
-  assert.equal(existing.hasAttribute(marker), false);
-  assert.equal(h.preferences.size, 0);
+  assert.equal(existing.hasAttribute(marker), true);
+  assert.deepEqual(JSON.parse(h.preferences.get(preference)), ["old"]);
   assert.equal(existing.tabs.length, 1);
+});
+
+const openMarker = "zen-unpinned-folder-open";
+function retainedFixture() {
+  const tabs = ["one", "two", "three"].map(id => {
+    const attrs = new Map();
+    return {
+      id, localName: "tab", pinned: false, isConnected: true,
+      selected: false, multiselected: false,
+      hasAttribute: name => attrs.has(name),
+      getAttribute: name => attrs.get(name) ?? null,
+      setAttribute: (name, value) => attrs.set(name, value),
+      removeAttribute: name => attrs.delete(name),
+      closest() { return this.group; },
+    };
+  });
+  const item = group("retained", {
+    tabs, collapsed: true, querySelectorAll: () => tabs,
+    isTabVisibleInGroup(tab) {
+      return !this.isBeingDragged && (!this.collapsed || tab.selected || tab.multiselected);
+    },
+  });
+  tabs.forEach(tab => { tab.group = item; });
+  const h = harness();
+  const originalVisible = item.isTabVisibleInGroup;
+  h.setNext(item);
+  h.window.gBrowser.addTabGroup([]);
+  return { h, item, tabs, originalVisible };
+}
+
+test("collapsed group retains both selected tabs after multiselection clears", () => {
+  const { h, item, tabs: [one, two, three] } = retainedFixture();
+  one.multiselected = two.multiselected = true;
+  h.emit("TabMultiSelect");
+  one.multiselected = two.multiselected = false;
+  two.selected = true;
+  h.dispatch("TabSelect", { target: two, detail: { previousTab: one } });
+  h.flush();
+  assert.equal(one.hasAttribute(openMarker), true);
+  assert.equal(two.hasAttribute(openMarker), true);
+  assert.equal(three.hasAttribute(openMarker), false);
+  assert.equal(item.isTabVisibleInGroup(one), true);
+  assert.equal(nativeTabVisible(one), true);
+  assert.equal(item.isTabVisibleInGroup(three), false);
+});
+
+test("switching outside retains previous tab and removes stale aria-hidden", () => {
+  const { h, item, tabs: [one] } = retainedFixture();
+  h.dispatch("TabSelect", { target: {}, detail: { previousTab: one } });
+  one.setAttribute("aria-hidden", "true");
+  h.flush();
+  assert.equal(one.hasAttribute(openMarker), true);
+  assert.equal(one.hasAttribute("aria-hidden"), false);
+  assert.equal(item.isTabVisibleInGroup(one), true);
+  item.isBeingDragged = true;
+  assert.equal(item.isTabVisibleInGroup(one), false);
+});
+
+test("removed multiselection attributes are captured before they are lost", () => {
+  const { h, tabs: [one, two] } = retainedFixture();
+  h.mutate([one, two].map(target => ({ type: "attributes", target,
+    attributeName: "multiselected", oldValue: "true" })));
+  assert.equal(one.hasAttribute(openMarker), true);
+  assert.equal(two.hasAttribute(openMarker), true);
+});
+
+test("expand clears retained history; collapse starts from current selection", () => {
+  const { h, item, tabs: [one, two] } = retainedFixture();
+  h.dispatch("TabSelect", { target: one });
+  item.collapsed = false;
+  h.emit("TabGroupExpand", item);
+  assert.equal(one.hasAttribute(openMarker), false);
+  two.selected = true;
+  item.collapsed = true;
+  h.emit("TabGroupCollapse", item);
+  assert.equal(one.hasAttribute(openMarker), false);
+  assert.equal(two.hasAttribute(openMarker), true);
+});
+
+test("unload, close and leaving a group remove remembered visibility", () => {
+  for (const flag of ["pending", "closing", "pinned", "moved"]) {
+    const { h, tabs: [one] } = retainedFixture();
+    h.dispatch("TabSelect", { target: one });
+    assert.equal(one.hasAttribute(openMarker), true);
+    if (flag === "moved") one.group = null;
+    else one.setAttribute(flag, "true");
+    h.mutate([{ type: "attributes", target: one, attributeName: flag }]);
+    assert.equal(one.hasAttribute(openMarker), false, flag);
+  }
+});
+
+test("disable restores visibility method, native aria and clears retained markers", () => {
+  const { h, item, tabs: [one], originalVisible } = retainedFixture();
+  h.dispatch("TabSelect", { target: one });
+  h.flush();
+  h.stop();
+  assert.equal(one.hasAttribute(openMarker), false);
+  assert.equal(one.getAttribute("aria-hidden"), "true");
+  assert.equal(item.isTabVisibleInGroup, originalVisible);
+  assert.equal(Object.hasOwn(item, "activeTabs"), false);
+  assert.equal(nativeTabVisible(one), false);
+  h.dispatch("TabSelect", { target: one });
+  h.flush();
+  assert.equal(one.hasAttribute(openMarker), false);
+});
+
+test("split-view descendants retain their shared row after switching outside", () => {
+  const { h, item, tabs: [one, two, third] } = retainedFixture();
+  const splitAttributes = new Map([["aria-hidden", "true"]]);
+  const split = {
+    tabs: [one, two],
+    setAttribute: (name, value) => splitAttributes.set(name, value),
+    removeAttribute: name => splitAttributes.delete(name),
+  };
+  one.splitview = two.splitview = split;
+  one.group = two.group = { collapsed: false };
+  one.group.group = item;
+  one.closest = two.closest = () => item;
+  // Zen's group.tabs getter can omit wrapper descendants; DOM scan must not.
+  item.tabs = [third];
+  one.selected = true;
+  h.emit("TabMultiSelect");
+  one.selected = false;
+  h.dispatch("TabSelect", { target: {}, detail: { previousTab: one } });
+  h.flush();
+  assert.equal(one.hasAttribute(openMarker), true);
+  assert.equal(splitAttributes.has("aria-hidden"), false);
+  assert.equal(item.isTabVisibleInGroup(one), true);
+  assert.equal(item.isTabVisibleInGroup(two), true);
+  assert.equal(nativeTabVisible(one), true);
+  assert.equal(nativeTabVisible(two), true);
+});
+
+// Installed Zen 1.24b tab.visible's group traversal (after open/hidden guards).
+function nativeTabVisible(tab) {
+  if (tab.selected || tab.multiselected) return true;
+  for (let parent = tab.group; parent; parent = parent.group) {
+    if (parent.collapsed && !parent.activeTabs?.includes(tab)) return false;
+  }
+  return true;
+}
+
+test("startup/session restore exclude pinned folders and Essentials", () => {
+  const pinned = group("pinned", { pinned: true });
+  const folder = group("folder", { localName: "zen-folder", isZenFolder: true });
+  const essential = group("essential", { essential: true });
+  const regular = group("regular");
+  const h = harness({ groups: [pinned, folder, essential, regular] });
+  h.emit("SSWindowStateReady");
+  for (const excluded of [pinned, folder, essential]) assert.equal(excluded.hasAttribute(marker), false);
+  assert.equal(regular.hasAttribute(marker), true);
+});
+
+test("Zen native split-group panes remain visible together without splitview wrappers", () => {
+  const { h, item, tabs: [one, two] } = retainedFixture();
+  const split = {
+    group: item, collapsed: false, tabs: [one, two],
+    hasAttribute: name => name === "split-view-group",
+  };
+  one.group = two.group = split;
+  one.closest = two.closest = () => item;
+  one.splitview = two.splitview = null;
+  h.dispatch("TabSelect", { target: one });
+  h.dispatch("TabSelect", { target: {}, detail: { previousTab: one } });
+  h.flush();
+  assert.equal(one.hasAttribute(openMarker), true);
+  assert.equal(two.hasAttribute(openMarker), true);
+  assert.equal(nativeTabVisible(one), true);
+  assert.equal(nativeTabVisible(two), true);
+});
+
+test("disable preserves later visibility wrappers without leaving retained behavior", () => {
+  const { h, item, tabs: [one] } = retainedFixture();
+  h.dispatch("TabSelect", { target: one });
+  const wrapped = item.isTabVisibleInGroup;
+  const other = function (tab) { return wrapped.call(this, tab); };
+  item.isTabVisibleInGroup = other;
+  h.stop();
+  assert.equal(item.isTabVisibleInGroup, other);
+  assert.equal(item.isTabVisibleInGroup(one), false);
 });
 
 function headerEvent(item) {
@@ -119,7 +313,7 @@ test("right-clicking an enrolled header opens native rename/color editor once", 
   assert.equal(event.propagationStopped, true);
 });
 
-test("existing headers, pinned folders and child-tab menus are untouched", () => {
+test("unmarked headers, pinned folders and child-tab menus are untouched", () => {
   const h = harness();
   const pinned = group("pinned", { pinned: true });
   pinned.setAttribute(marker, "true");
@@ -241,7 +435,7 @@ test("new regular groups are enrolled without changing native arguments or retur
   assert.deepEqual(JSON.parse(h.preferences.get(preference)), ["new"]);
 });
 
-test("restored, adopted and split-view creation is never newly enrolled", () => {
+test("creation wrapper defers restored/adopted groups to events and excludes split creation", () => {
   for (const options of [{ id: "old" }, { isAdoptingGroup: true }, { forSplitView: true }]) {
     const h = harness();
     const result = h.window.gBrowser.addTabGroup([], options);
@@ -273,16 +467,16 @@ test("pinned folders, Essentials, split groups and pinned children are excluded"
   assert.equal(split.hasAttribute(marker), false);
 });
 
-test("restart restores only previously enrolled IDs", () => {
+test("restart enrolls existing regular groups as well as previously enrolled IDs", () => {
   const preferences = new Map([[preference, '["owned"]']]);
   const owned = group("owned");
   const existing = group("old");
   harness({ preferences, groups: [owned, existing] });
   assert.equal(owned.hasAttribute(marker), true);
-  assert.equal(existing.hasAttribute(marker), false);
+  assert.equal(existing.hasAttribute(marker), true);
 });
 
-test("late session restore marks only known IDs after creation finishes", () => {
+test("late session restore enrolls existing regular groups after creation finishes", () => {
   const h = harness({ preferences: new Map([[preference, '["owned"]']]) });
   const owned = group("owned");
   const old = group("old");
@@ -292,7 +486,7 @@ test("late session restore marks only known IDs after creation finishes", () => 
   assert.equal(owned.hasAttribute(marker), false);
   h.flush();
   assert.equal(owned.hasAttribute(marker), true);
-  assert.equal(old.hasAttribute(marker), false);
+  assert.equal(old.hasAttribute(marker), true);
 });
 
 test("multiple windows merge enrollment without overwriting other IDs", () => {
